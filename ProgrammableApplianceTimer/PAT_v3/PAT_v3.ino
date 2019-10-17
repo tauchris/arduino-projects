@@ -90,6 +90,8 @@
  * 
  */
 
+#include <EEPROM.h>
+
 // enum types
 enum BUTTON_STATE { BUTTON_OFF, BUTTON_PRESSED, BUTTON_STATE_MAX };
 enum PIN_INDEX { P_RED, P_GREEN, P_BLUE, PIN_INDEX_MAX };
@@ -97,7 +99,7 @@ enum RGB_COLOR { RGB_OFF, RGB_DIM_GREEN, RGB_BLUE, RGB_MAGENTA, RGB_AMBER, RGB_R
 enum MODE { M_IDLE, M_ACTIVE, M_PROGRAM, M_COUNT, M_ECHO, M_SAVE, M_CANCEL, MODE_MAX };
 enum STEP_RECORD_FIELD { STEP_COLOR, STEP_DURATION, STEP_NEXT_STEP, STEP_RECORD_FIELD_MAX };
 
-// constants : pins
+// constants : pins and addresses
 const byte modeButton = 3;
 const byte tripButton = 2;
 const byte remoteButton = 4;
@@ -105,6 +107,7 @@ const byte ledRed = 10;
 const byte ledGreen = 5;
 const byte ledBlue = 6;
 const byte relayControl = 8;
+const int eeAddrRelayTimerMs = 0x00;
 // constants : limits, defaults, and conversion ratios
 const unsigned long debounceMs = 25;
 const unsigned long secToMs = 1000;
@@ -113,8 +116,6 @@ const unsigned long relayTimeoutToEchoTimeoutRatio = 120;    // Ratio is 1m/0.5s
 const unsigned long pgmModeTimeoutMs = 90 * secToMs;
 const unsigned long longPressMs = 5 * secToMs;
 const unsigned long minSaveOrCancelModeMs = 1 * secToMs;
-const unsigned long minRelayTimerMinutes = 1;
-const unsigned long maxRelayTimerMinutes = 20;
 
 // constant LUTs
 const byte color[RGB_COLOR_MAX][PIN_INDEX_MAX]={
@@ -179,7 +180,7 @@ unsigned long lastIndiciatorStepMs = 0;
 unsigned long lastUpdateIndicatorsMs = 0;
 unsigned long nextUpdateIndicatorsMs = 0;
 // global variables: program state
-unsigned long relayTimerMs = 2 * minToMs;     // Starting default = 2m
+unsigned long relayTimerMs = 0;        // Will be read from EEPROM (defaults to 5 minutes if EEPROM value is garbage)
 unsigned long echoTimeoutMs = 0;
 unsigned long newRelayTimerMs = 0;
 byte modeButtonState = BUTTON_OFF;
@@ -221,12 +222,32 @@ const char *modeToStr(int mode) {
 #endif
 
 
+void setLEDColor(const byte rgb[]) {
+  analogWrite(ledRed,   rgb[P_RED]);
+  analogWrite(ledGreen, rgb[P_GREEN]);
+  analogWrite(ledBlue,  rgb[P_BLUE]);
+}
+
+int normalizeRelayTimerMinutes(int timerMinutes) {
+  static const int minRelayTimerMinutes = 1;
+  static const int maxRelayTimerMinutes = 20;
+  timerMinutes = max(timerMinutes, minRelayTimerMinutes);
+  timerMinutes = min(timerMinutes, maxRelayTimerMinutes);
+  return timerMinutes;
+}
 
 void setup() {
   #ifdef DEBUGGING_MESSAGES_ENABLED
   Serial.begin(9600);
+  while (!Serial) {
+    ; // wait for serial port to connect
+  }
+  // and delay an extra second, because Serial port isn't *really* connected correctly yet...
+  delay(1000);
   #endif
   
+  DebugMsgLn("PAT setup(): Initializing...");
+
   pinMode(ledRed, OUTPUT);
   pinMode(ledGreen, OUTPUT);
   pinMode(ledBlue, OUTPUT);
@@ -240,7 +261,26 @@ void setup() {
 
   digitalWrite(relayControl, HIGH);  // relay is active-low; pullup to default as OFF
   pinMode(relayControl, OUTPUT);
+
+  setLEDColor(color[RGB_WHITE]);
+  delay(1000);
+
+  EEPROM.get(eeAddrRelayTimerMs, relayTimerMs);
+  int relayTimerMinutes = relayTimerMs / minToMs;
+  DebugMsg("PAT setup(): Read saved relayTimerMs = "); DebugMsg(relayTimerMs);
+  DebugMsg("; ["); DebugMsg(relayTimerMinutes); DebugMsgLn(" minutes]");
+  int normalizedTimerMinutes = normalizeRelayTimerMinutes(relayTimerMinutes);
+  if (relayTimerMinutes != normalizedTimerMinutes) {
+    DebugMsgLn("PAT setup(): Stored value of relayTimerMs is invalid.  Defaulting to 5 minutes (300000ms)");
+    relayTimerMs = 5 * minToMs;
+    EEPROM.put(eeAddrRelayTimerMs, relayTimerMs);
+  }
+
+  delay(1000);
+  setLEDColor(color[RGB_OFF]);
+  DebugMsgLn("PAT is READY.");
 }
+
 
 void changeMode(int newMode) {
   if (mode == newMode) { return; }
@@ -265,8 +305,7 @@ void changeMode(int newMode) {
         DebugMsg(currentMs - lastModeChangeMs);
         DebugMsg("ms; newRelayTimerMinutes => ");
         DebugMsgLn(newRelayTimerMinutes);
-        newRelayTimerMinutes = max(newRelayTimerMinutes, minRelayTimerMinutes);
-        newRelayTimerMinutes = min(newRelayTimerMinutes, maxRelayTimerMinutes);
+        newRelayTimerMinutes = normalizeRelayTimerMinutes(newRelayTimerMinutes);
         newRelayTimerMs = newRelayTimerMinutes * minToMs;
         DebugMsg("changeMode(): After normalizing newRelayTimerMinutes, newRelayTimerMs => ");
         DebugMsgLn(newRelayTimerMs);
@@ -340,12 +379,6 @@ void checkButtons() {
           break;
       }
     } else if (mode == M_COUNT) {
-      // save count
-      // FIXME: double check that this math is correct when currentMillis wraps.
-      unsigned long newRelayTimerMinutes = (currentMs - lastModeChangeMs) / minToMs;
-      newRelayTimerMinutes = max(newRelayTimerMinutes, minRelayTimerMinutes);
-      newRelayTimerMinutes = min(newRelayTimerMinutes, maxRelayTimerMinutes);
-      newRelayTimerMs = newRelayTimerMinutes * minToMs;
       changeMode(M_PROGRAM);
     }
   }
@@ -434,7 +467,7 @@ void doSynchronousModeWork() {
       case M_SAVE:
         if (relayTimerMs != newRelayTimerMs) {
           relayTimerMs = newRelayTimerMs;
-          // FIXME: SAVE relayTimerMs to EEPROM
+          EEPROM.put(eeAddrRelayTimerMs, relayTimerMs);
         }
         break;
       default:
@@ -442,12 +475,6 @@ void doSynchronousModeWork() {
     }
     synchronousModeWorkDone = true;
   }
-}
-
-void setLEDColor(const byte rgb[]) {
-  analogWrite(ledRed,   rgb[P_RED]);
-  analogWrite(ledGreen, rgb[P_GREEN]);
-  analogWrite(ledBlue,  rgb[P_BLUE]);
 }
 
 void updateIndicators() {
@@ -460,28 +487,7 @@ void updateIndicators() {
   }
 }
 
-// Note: Interesting that you cannot do this during setup().  Not sure why.
-void firstIterationAction() {
-  static bool isFirstIteration = true;
-  if (isFirstIteration) {
-    delay(1000);
-    setLEDColor(color[RGB_WHITE]);
-    delay(1000);
-    DebugMsgLn("PAT initializing...");
-    
-  // FIXME: READ relayTimerMs from EEPROM
-  // relayTimerMs = ??    
-    DebugMsg("PAT INIT: relayTimer = "); DebugMsg(relayTimerMs/minToMs); DebugMsgLn(" minutes");
-    
-    delay(1000);
-    setLEDColor(color[RGB_OFF]);
-    DebugMsgLn("PAT is READY.");
-    isFirstIteration = false;
-  }
-}
-
 void loop() {
-  firstIterationAction();
   currentMs = millis();
   checkButtons();
   checkTimeouts();
