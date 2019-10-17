@@ -69,24 +69,12 @@
  *    as accurate for devices with any sufficiently-fast clock.  Only downside is that it probably requires a bit
  *    more global variables and possibly more program storage space.  Hard to measure that, and honestly, I doubt
  *    the difference is significant.
- *  - I added a "firstIterationAction()" function to be called from loop().  This is an unfortunate compromise.  
- *    I originally added some Serial debug messages and LED light settings in setup() to try to get an idea of 
- *    when the device had successfully started -- but the lights never did what I expected, and the Serial message
- *    was always dropped-- or at best, garbled.  Also, putting a delay() statement in setup() also turns out to
- *    be bad (or pointless).  Not really sure why that is.  Moved the EEPROM read code to firstIterationAction() 
- *    as well, just to be safe.
  * 
  * TODO/FIXMEs:
  * 
- * 1. Actually read setting from EEPROM and write setting to EEPROM
- *    Assuming "normal" way of setting initial EEPROM value is to load and run a separate setup program on 
- *    the Arduino, and ensure that the address chosen for the value is the same in both programs.
- * 2. Consider long-term EEPROM stability.  What is expected lifetime of device?  What is expected number of
- *    power-up/programming cycles for a given period of time (e.g., a month).  How long would a single EEPROM
- *    memory address be safe to use given the stated max read/write cycles given?
- * 3. Actually test external switches with relay-controlled 12V power supply
- * 4. Consider whether 12V power supply can be controlled with just a transistor (instead of a relay)
- * 5. Consider whether NO/NC relays can be controlled with transistors (instead of a relay)
+ * 1. Actually test external switches with relay-controlled 12V power supply
+ * 2. Consider whether 12V power supply can be controlled with just a transistor (instead of a relay)
+ * 3. Consider whether NO/NC relays can be controlled with transistors (instead of a relay)
  * 
  */
 
